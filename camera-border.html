@@ -1,0 +1,644 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Mando · Camera Border</title>
+<link href="https://fonts.googleapis.com/css2?family=Kanit:ital,wght@1,900&display=swap" rel="stylesheet">
+<!--
+  ================================================================
+   MANDO · LIGHTNING CAMERA BORDER  -  OBS "Browser" source
+  ================================================================
+   The webcam sits flush in the bottom-right corner of the screen,
+   so the border only covers its TOP and LEFT edges. Every few
+   seconds a lightning bolt strikes the name and the charge runs
+   along the border like a current until it leaves the screen.
+
+   The name sits in a tag hanging inside the top-left corner, so
+   nothing covers the League HUD (champion portraits and health
+   bars) that sits right above the webcam. The bolt comes in from
+   the upper left, through the open part of the game.
+
+   ADD IT TO OBS
+     1. Sources -> + -> Browser
+     2. URL: the link to this page (or tick "Local file" and pick it)
+     3. Width 1920, Height 1080  -> it covers the whole screen and
+        the border lands in the bottom-right corner by itself.
+     4. Keep it ABOVE the webcam in the source list and size the
+        webcam to fill the box (460 x 325 by default).
+
+   LINK OPTIONS (mix them with &)
+     ?color=green        blue (default), cyan, teal, green, lime, yellow,
+                         gold, orange, red, crimson, pink, magenta,
+                         purple, violet, white - or any hex: ?color=ff6600
+     ?w=460&h=325        webcam box size, in 1920x1080 pixels
+     ?every=10           seconds between strikes
+     ?name=MANDO         text on the border (?name= hides it)
+     ?place=top          name breaks the top line instead of the corner
+                         tag (covers whatever sits above the webcam)
+     ?zoom               browser preview only: close-up of the corner
+     ?hud                browser preview only: mock League portraits above
+                         the webcam, to check nothing covers them
+
+   Opened in a normal browser it shows a dark demo background and a
+   camera placeholder (click anywhere to fire the lightning). Inside
+   OBS the background is transparent.
+  ================================================================
+-->
+<script>
+const CONFIG = {
+  name: "MANDO",               // text on the border ("" = no name)
+  color: "blue",               // preset name, hex or any CSS color  ·  link: ?color=green
+
+  screen: { width: 1920, height: 1080 },  // OBS canvas the border is laid out on
+  cam: { width: 460, height: 325 },       // webcam box in the bottom-right corner  ·  link: ?w=460&h=325
+
+  font: { family: "Kanit", weight: 900, style: "italic", size: 50 },
+  namePlace: "corner",         // "corner" = tag inside the top-left corner, clear of the game HUD
+                               // "top" = name breaks the top line  ·  link: ?place=top
+  namePosition: 0.5,           // "top" only: where along the top edge (0 = corner, 1 = screen edge)
+
+  border: 5,                   // line thickness
+  corner: 22,                  // size of the cut corner
+  every: 10,                   // seconds between strikes  ·  link: ?every=6
+  boltHeight: 260,             // how far above the name the bolt comes from
+  currentSpeed: 700,           // how fast the charge runs along the border (px per second)
+  ambient: true,               // small idle crackles between strikes
+
+  demoBackground: "auto",      // "auto" = demo background only outside OBS · true / false forces it
+};
+</script>
+
+<style>
+  * { box-sizing:border-box; }
+  html, body { margin:0; padding:0; width:100%; height:100%; overflow:hidden; background:transparent; }
+  body.demo { background:#05080a; cursor:pointer; }
+
+  .stage { position:absolute; left:0; top:0; transform-origin:0 0; overflow:hidden; }
+  .stage canvas { position:absolute; display:block; }
+
+  .demo-only { display:none; }
+  body.demo .stage { background:radial-gradient(ellipse at 38% 42%, #1c3a33 0%, #10231f 45%, #081210 100%); }
+  body.demo .demo-only { display:flex; }
+  .cam-box {
+    position:absolute; align-items:center; justify-content:center;
+    background:repeating-linear-gradient(135deg, rgba(255,255,255,.035) 0 14px, transparent 14px 28px), rgba(0,0,0,.35);
+    color:rgba(255,255,255,.35); font:700 30px 'Segoe UI', Arial, sans-serif; letter-spacing:4px; text-transform:uppercase;
+  }
+  .hint {
+    position:absolute; left:48px; top:40px; flex-direction:column; gap:10px;
+    color:rgba(255,255,255,.55); font:600 30px 'Segoe UI', Arial, sans-serif;
+  }
+  .hint b { color:#fff; font-size:44px; }
+  .hud { position:absolute; width:56px; height:56px; margin:-28px 0 0 -28px; border-radius:50%;
+         background:radial-gradient(circle at 50% 40%, #56606a, #22282e); border:3px solid #8a7a4a; }
+  .hud::after { content:""; position:absolute; left:4px; right:4px; bottom:-12px; height:6px; background:#2bbd4a; border:1px solid #000; }
+</style>
+</head>
+<body>
+
+<div class="stage">
+  <div class="demo-only hint"></div>
+  <div class="demo-only cam-box">camera</div>
+  <canvas></canvas>
+</div>
+
+<script>
+(function () {
+  'use strict';
+  const C = CONFIG;
+  const q = new URLSearchParams(location.search);
+  const rnd = (a, b) => a + Math.random() * (b - a);
+  const num = (key, def, min, max) => {
+    const v = parseFloat(q.get(key));
+    return Number.isFinite(v) ? Math.min(max, Math.max(min, v)) : def;
+  };
+
+  // ---------- color: preset, hex or any CSS color ----------
+  const PRESETS = {
+    blue: '#2f9bff', cyan: '#00e0ff', teal: '#00f0c0', green: '#27ff64', lime: '#a6ff2e',
+    yellow: '#ffe62e', gold: '#ffbe1f', orange: '#ff7a1c', red: '#ff2a3a', crimson: '#ff1f5a',
+    pink: '#ff3ca6', magenta: '#ff2bf0', purple: '#a456ff', violet: '#7d5cff', white: '#e4ecff',
+  };
+  function parseColor(v) {
+    if (!v) return null;
+    v = String(v).trim().toLowerCase();
+    if (PRESETS[v]) v = PRESETS[v];
+    else if (/^([0-9a-f]{3}|[0-9a-f]{6})$/.test(v)) v = '#' + v;
+    const g = document.createElement('canvas').getContext('2d');
+    g.fillStyle = '#010203'; g.fillStyle = v;
+    const out = g.fillStyle;
+    if (out === '#010203' && v !== '#010203') return null;          // not a valid color
+    if (out[0] === '#') { const n = parseInt(out.slice(1), 16); return [n >> 16 & 255, n >> 8 & 255, n & 255]; }
+    return out.match(/[\d.]+/g).slice(0, 3).map(Number);
+  }
+  // "?color=#ff6600" puts the hex in the hash, so read it from there too
+  const asked = q.get('color') || (q.has('color') && location.hash.slice(1));
+  let base = parseColor(asked) || parseColor(C.color) || [47, 155, 255];
+  const peak = Math.max(...base);                                     // dark colors can't glow: lift them
+  base = peak === 0 ? [200, 200, 200] : peak < 200 ? base.map(x => Math.round(x * 200 / peak)) : base;
+  const mix = (a, b, t) => a.map((x, i) => Math.round(x + (b[i] - x) * t));
+  const rgba = (c, a) => 'rgba(' + c[0] + ',' + c[1] + ',' + c[2] + ',' + Math.max(0, Math.min(1, a)) + ')';
+  const WHITE = [255, 255, 255], COL = base, LIGHT = mix(base, WHITE, .5), CORE = mix(base, WHITE, .82);
+
+  // ---------- layout (in screen pixels, 1920x1080 by default) ----------
+  const SW = C.screen.width, SH = C.screen.height;
+  const camW = num('w', C.cam.width, 160, SW - 40), camH = num('h', C.cam.height, 90, SH - 200);
+  const every = num('every', C.every, 2, 3600);
+  const NAME = (q.has('name') ? q.get('name') : C.name).trim().slice(0, 20);
+  const B = C.border, SPEED = C.currentSpeed;
+  const PLACE = NAME && (q.get('place') || C.namePlace) !== 'top' ? 'corner' : 'top';
+  const x0 = SW - camW, y0 = SH - camH;                 // top-left corner of the webcam box
+  const cut = Math.min(C.corner, camW / 5, camH / 5);
+  const PAD = PLACE === 'corner' ? 250 : 110, TOP = C.boltHeight + 70;
+  const RX = x0 - PAD, RY = y0 - TOP, RW = SW - RX, RH = SH - RY;   // area the canvas covers
+
+  const stage = document.querySelector('.stage');
+  const canvas = document.querySelector('canvas');
+  const ctx = canvas.getContext('2d');
+  stage.style.width = SW + 'px'; stage.style.height = SH + 'px';
+  canvas.style.cssText = 'left:' + RX + 'px;top:' + RY + 'px;width:' + RW + 'px;height:' + RH + 'px';
+
+  // demo background only outside OBS (OBS injects window.obsstudio)
+  let demo = C.demoBackground === true || (C.demoBackground === 'auto' && !window.obsstudio);
+  if (q.has('preview')) demo = true;
+  if (q.has('transparent')) demo = false;
+  if (demo) document.body.classList.add('demo');
+  const zoom = demo && q.has('zoom');
+  const box = document.querySelector('.cam-box');
+  box.style.cssText = 'left:' + x0 + 'px;top:' + y0 + 'px;width:' + camW + 'px;height:' + camH + 'px';
+  document.querySelector('.hint').innerHTML =
+    '<b>OBS · Browser source · ' + SW + ' × ' + SH + '</b><span>click anywhere to fire the lightning</span>';
+  // preview only (?hud): mock of League's champion portraits above the webcam, measured from the stream
+  if (demo && q.has('hud')) {
+    const spots = [[1561, 672], [1639, 672], [1717, 672], [1795, 672], [1873, 672], [1750, 590], [1815, 590], [1880, 590]];
+    for (const [x, y] of spots) {
+      const h = document.createElement('div');
+      h.className = 'hud';
+      h.style.left = x - (1920 - SW) + 'px'; h.style.top = y - (1080 - SH) + 'px';
+      stage.insertBefore(h, canvas);
+    }
+  }
+
+  // ---------- name metrics (needs the font loaded) ----------
+  const FAMILY = '"' + C.font.family + '", "Arial Black", sans-serif';
+  const fontAt = s => C.font.style + ' ' + C.font.weight + ' ' + s + 'px ' + FAMILY;
+  let FONT, M, GAP = 16, nameCX, baseline, txL, txR, txT, txB, gapL, gapR, routes, bracket, bracketOK;
+  let lines, startL, startR, plate = null, plateEdge, slashes;
+  let K = 1, spriteN, spriteH, SP = 44, spX, spY, spW, spH;
+
+  function layout() {
+    const g = document.createElement('canvas').getContext('2d');
+    let size = C.font.size;
+    g.font = fontAt(size);
+    let m = g.measureText(NAME), w = m.actualBoundingBoxLeft + m.actualBoundingBoxRight;
+    const maxW = PLACE === 'corner' ? camW * .45 : (camW - cut) * .72;
+    if (w > maxW) { size *= maxW / w; g.font = fontAt(size); m = g.measureText(NAME); w = m.actualBoundingBoxLeft + m.actualBoundingBoxRight; }
+    FONT = fontAt(size);
+    M = { w, left: m.actualBoundingBoxLeft, asc: m.actualBoundingBoxAscent, desc: m.actualBoundingBoxDescent };
+
+    const full = new Path2D();                          // the whole L: screen edge -> corner -> screen bottom
+    full.moveTo(SW + 30, y0); full.lineTo(x0 + cut, y0); full.lineTo(x0, y0 + cut); full.lineTo(x0, SH + 30);
+
+    if (PLACE === 'corner') {
+      // tag hanging inside the corner: top and left sides are the border itself, right side slanted
+      const padX = 14, padY = 10, ph = Math.round(M.asc + M.desc + padY * 2 + B / 2);
+      txL = x0 + B / 2 + 14; txR = txL + M.w;
+      baseline = y0 + B / 2 + padY + M.asc;
+      txT = baseline - M.asc; txB = baseline + M.desc;
+      nameCX = (txL + txR) / 2;
+      const xr = txR + padX;
+      plate = new Path2D();
+      plate.moveTo(x0 + cut, y0); plate.lineTo(xr + ph, y0); plate.lineTo(xr, y0 + ph);
+      plate.lineTo(x0, y0 + ph); plate.lineTo(x0, y0 + cut); plate.closePath();
+      plateEdge = new Path2D();
+      plateEdge.moveTo(xr + ph, y0); plateEdge.lineTo(xr, y0 + ph); plateEdge.lineTo(x0, y0 + ph);
+      slashes = new Path2D();                             // three little cuts trailing the tag
+      for (let k = 0; k < 3; k++) {
+        const sx = xr + ph + 12 + k * 11;
+        slashes.moveTo(sx, y0 + B / 2); slashes.lineTo(sx - 12, y0 + B / 2 + 12);
+      }
+      startR = [xr + ph, y0]; startL = [x0, y0 + ph];
+      lines = [full];
+    } else {
+      const half = M.w / 2 + GAP;
+      nameCX = x0 + cut + (camW - cut) * C.namePosition;
+      nameCX = Math.min(SW - half - 30, Math.max(x0 + cut + half + 30, nameCX));
+      baseline = y0 - 2 + (M.asc - M.desc) / 2;          // letters sit centered on the line
+      txL = nameCX - M.w / 2; txR = nameCX + M.w / 2; txT = baseline - M.asc; txB = baseline + M.desc;
+      gapL = NAME ? txL - GAP : nameCX; gapR = NAME ? txR + GAP : nameCX;
+      startR = [gapR, y0]; startL = [gapL, y0];
+    }
+
+    // the charge leaves the name both ways: right until the screen edge, left (around the corner) and down
+    routes = [
+      route([startR, [SW + 30, y0]]),
+      PLACE === 'corner'
+        ? route([startL, [x0, SH + 30]])
+        : route([startL, [x0 + cut, y0], [x0, y0 + cut], [x0, SH + 30]]),
+    ];
+    if (PLACE === 'top') lines = routes.map(r => r.path);   // line breaks around the name
+
+    // thin bracket hugging the cut corner, just outside the main line
+    const room = PLACE === 'corner' ? camW * .3 : gapL - (x0 + cut) - 24;
+    const d = 9, e = d * (Math.SQRT2 - 1), La = Math.min(90, room, camH - cut - 20);
+    bracketOK = La > 10;
+    bracket = new Path2D();
+    bracket.moveTo(x0 + cut - e + La, y0 - d);
+    bracket.lineTo(x0 + cut - e, y0 - d);
+    bracket.lineTo(x0 - d, y0 + cut - e);
+    bracket.lineTo(x0 - d, y0 + cut - e + La);
+  }
+
+  // samples every few px along a route, each with its outward normal
+  function route(pts) {
+    const cx = x0 + camW / 2, cy = y0 + camH / 2, S = [];
+    let s = 0;
+    for (let i = 0; i < pts.length - 1; i++) {
+      const [ax, ay] = pts[i], [bx, by] = pts[i + 1];
+      const len = Math.hypot(bx - ax, by - ay), ux = (bx - ax) / len, uy = (by - ay) / len;
+      let nx = -uy, ny = ux;
+      if (nx * (ax - cx) + ny * (ay - cy) < 0) { nx = -nx; ny = -ny; }
+      const n = Math.max(1, Math.ceil(len / 5));
+      for (let k = i === 0 ? 0 : 1; k <= n; k++) {
+        S.push({ x: ax + (bx - ax) * k / n, y: ay + (by - ay) * k / n, nx, ny, tx: ux, ty: uy, s: s + len * k / n, tp: Infinity });
+      }
+      s += len;
+    }
+    const path = new Path2D();
+    path.moveTo(pts[0][0], pts[0][1]);
+    for (let i = 1; i < pts.length; i++) path.lineTo(pts[i][0], pts[i][1]);
+    return { S, len: s, path, t0: Infinity, done: true };
+  }
+
+  // name drawn once into two sprites: normal and white-hot (blended in on the strike)
+  function sprite(hot) {
+    const cv = document.createElement('canvas');
+    cv.width = Math.ceil(spW * K); cv.height = Math.ceil(spH * K);
+    const g = cv.getContext('2d');
+    g.scale(K, K);
+    g.font = FONT; g.lineJoin = 'round';
+    const tx = SP + M.left, ty = SP + M.asc;
+    g.shadowColor = rgba(hot ? LIGHT : COL, 1);
+    g.shadowBlur = (hot ? 40 : 22) * K;                  // shadows ignore the transform
+    g.fillStyle = rgba(hot ? CORE : COL, 1);
+    g.fillText(NAME, tx, ty); g.fillText(NAME, tx, ty);
+    g.shadowBlur = 0; g.shadowColor = 'transparent';
+    if (!hot) { g.lineWidth = 10; g.strokeStyle = 'rgba(3,5,10,.9)'; g.strokeText(NAME, tx, ty); }
+    g.lineWidth = hot ? 6 : 4; g.strokeStyle = rgba(hot ? CORE : COL, 1); g.strokeText(NAME, tx, ty);
+    const gr = g.createLinearGradient(0, ty - M.asc, 0, ty + M.desc);
+    if (hot) { gr.addColorStop(0, '#fff'); gr.addColorStop(1, rgba(CORE, 1)); }
+    else { gr.addColorStop(0, '#fff'); gr.addColorStop(.4, rgba(CORE, 1)); gr.addColorStop(1, rgba(mix(COL, LIGHT, .25), 1)); }
+    g.fillStyle = gr; g.fillText(NAME, tx, ty);
+    return cv;
+  }
+
+  // ---------- fit the stage to the window / OBS source ----------
+  function fit() {
+    let s = Math.min(innerWidth / SW, innerHeight / SH);
+    let ox = demo ? (innerWidth - SW * s) / 2 : innerWidth - SW * s;     // in OBS: pinned to bottom-right
+    let oy = demo ? (innerHeight - SH * s) / 2 : innerHeight - SH * s;
+    if (zoom) {                                          // preview only: fill the window with the border area
+      const vx = Math.max(0, RX), vy = Math.max(0, RY), vw = SW - vx, vh = SH - vy;
+      s = Math.min(innerWidth / vw, innerHeight / vh);
+      ox = innerWidth - SW * s; oy = innerHeight - SH * s;
+    }
+    stage.style.transform = 'translate(' + ox + 'px,' + oy + 'px) scale(' + s + ')';
+    K = s * (window.devicePixelRatio || 1);
+    canvas.width = Math.round(RW * K); canvas.height = Math.round(RH * K);
+    if (NAME) {
+      spW = M.w + SP * 2; spH = M.asc + M.desc + SP * 2;
+      spX = txL - SP; spY = txT - SP;
+      spriteN = sprite(false); spriteH = sprite(true);
+    }
+  }
+
+  // ---------- lightning geometry ----------
+  function jag(ax, ay, bx, by, rough, minSeg) {        // midpoint displacement
+    let pts = [[ax, ay], [bx, by]], disp = Math.hypot(bx - ax, by - ay) * rough;
+    for (let it = 0; it < 9; it++) {
+      const out = [pts[0]];
+      let longest = 0;
+      for (let i = 1; i < pts.length; i++) {
+        const [x1, y1] = pts[i - 1], [x2, y2] = pts[i];
+        const dx = x2 - x1, dy = y2 - y1, L = Math.hypot(dx, dy) || 1, o = rnd(-disp, disp);
+        out.push([(x1 + x2) / 2 - dy / L * o, (y1 + y2) / 2 + dx / L * o], pts[i]);
+        longest = Math.max(longest, L / 2);
+      }
+      pts = out; disp /= 2;
+      if (longest < minSeg) break;
+    }
+    return pts;
+  }
+
+  function makeBolt(ix, iy) {
+    // corner tag: come in from the upper left so the bolt stays off the HUD above the webcam
+    const sx = PLACE === 'corner' ? ix - rnd(120, 220) : ix + rnd(-150, 150);
+    const main = jag(sx, RY - 20, ix, iy, .2, 5);
+    const branches = [], nb = 3 + (Math.random() * 3 | 0);
+    for (let b = 0; b < nb; b++) {
+      const k = Math.floor(rnd(.12, .7) * main.length);
+      const [px, py] = main[k], [qx, qy] = main[Math.min(main.length - 1, k + 4)];
+      const a = Math.atan2(qy - py, qx - px) + (Math.random() < .5 ? -1 : 1) * rnd(.35, .9);
+      const len = rnd(35, 110) * (1 - k / main.length * .6);
+      branches.push({ k, pts: jag(px, py, px + Math.cos(a) * len, py + Math.sin(a) * len, .3, 4) });
+    }
+    return { main, branches };
+  }
+
+  function poly(pts, n) {
+    ctx.beginPath();
+    ctx.moveTo(pts[0][0], pts[0][1]);
+    for (let i = 1; i < n; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+  }
+  function glow(pts, n, w, I) {                          // layered neon stroke
+    if (n < 2 || I <= 0) return;
+    poly(pts, n);
+    ctx.strokeStyle = rgba(COL, .09 * I); ctx.lineWidth = w * 6; ctx.stroke();
+    ctx.strokeStyle = rgba(COL, .24 * I); ctx.lineWidth = w * 2.6; ctx.stroke();
+    ctx.strokeStyle = rgba(LIGHT, .8 * I); ctx.lineWidth = w * 1.2; ctx.stroke();
+    ctx.strokeStyle = rgba(WHITE, I); ctx.lineWidth = w * .5; ctx.stroke();
+  }
+
+  // ---------- effects state ----------
+  const LEADER = .13, TAU = .45;
+  const arcs = [], sparks = [];
+  let S = null, nextStrike = 0, nextAmbient = 0, nextFlicker = 0, flickerUntil = 0;
+
+  function addArc(pts, born, life, w) { arcs.push({ pts, born, life, w }); }
+  function spark(x, y, vx, vy, life) { if (sparks.length < 300) sparks.push({ x, y, vx, vy, life, age: 0 }); }
+
+  function strike(t) {
+    const ix = !NAME ? nameCX : PLACE === 'corner' ? rnd(txL + M.w * .1, txL + M.w * .32) : rnd(txL + M.w * .25, txR - M.w * .25);
+    const iy = NAME ? txT + 3 : y0;
+    S = { T0: t + LEADER, ix, iy, bolt: makeBolt(ix, iy), phase: 0, started: false, burst: false };
+    for (const r of routes) { r.t0 = Infinity; r.done = false; for (const p of r.S) p.tp = Infinity; }
+  }
+
+  function boltI(d) {                                   // return stroke flickers a few times, then dies
+    if (d < 0) return 0;
+    if (d < .06) return 1;
+    if (d < .1) return .12;
+    if (d < .16) return .85;
+    if (d < .2) return .1;
+    if (d < .25) return .65;
+    return d < .55 ? .65 * Math.exp(-(d - .25) / .09) : 0;
+  }
+
+  function rejitter(pts) { for (let i = 1; i < pts.length - 1; i++) { pts[i][0] += rnd(-2.5, 2.5); pts[i][1] += rnd(-1.5, 1.5); } }
+
+  function sampleAt(r, pos) {
+    const i = Math.min(r.S.length - 1, Math.max(0, Math.round(pos / r.len * (r.S.length - 1))));
+    return r.S[i];
+  }
+
+  // ---------- drawing ----------
+  function drawBorder(t, boost, flash) {
+    const g = .82 + .12 * Math.sin(t * 1.8) + boost;
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.lineCap = 'butt'; ctx.lineJoin = 'miter';
+    if (plate) {                                         // the name tag: dark glass tinted with the color
+      const gr = ctx.createLinearGradient(0, y0, 0, txB + 12);
+      gr.addColorStop(0, rgba(mix(COL, [0, 0, 0], .6), .85)); gr.addColorStop(1, 'rgba(3,6,12,.8)');
+      ctx.fillStyle = gr; ctx.fill(plate);
+      ctx.globalCompositeOperation = 'lighter';
+      if (flash > .01) { ctx.fillStyle = rgba(COL, .4 * flash); ctx.fill(plate); }
+      ctx.lineWidth = 6; ctx.strokeStyle = rgba(COL, .14 * g); ctx.stroke(plateEdge);
+      ctx.lineWidth = 1.8; ctx.strokeStyle = rgba(LIGHT, .85); ctx.stroke(plateEdge);
+      ctx.lineCap = 'round'; ctx.lineWidth = 3; ctx.strokeStyle = rgba(COL, .6 * Math.min(1, g)); ctx.stroke(slashes);
+      ctx.lineCap = 'butt';
+      ctx.globalCompositeOperation = 'source-over';
+    }
+    ctx.strokeStyle = 'rgba(0,0,0,.35)'; ctx.lineWidth = B + 7;
+    for (const p of lines) ctx.stroke(p);                // dark underlay: readable over bright maps
+    ctx.globalCompositeOperation = 'lighter';
+    const layers = [[B * 5, COL, .07 * g], [B * 2.4, COL, .2 * g], [B, COL, .95], [B * .4, CORE, .75 * g]];
+    for (const [w, c, a] of layers) {
+      ctx.lineWidth = w; ctx.strokeStyle = rgba(c, a);
+      for (const p of lines) ctx.stroke(p);
+    }
+    if (bracketOK) {
+      ctx.lineWidth = 5; ctx.strokeStyle = rgba(COL, .12 * g); ctx.stroke(bracket);
+      ctx.lineWidth = 1.6; ctx.strokeStyle = rgba(LIGHT, .6 * g); ctx.stroke(bracket);
+    }
+    for (const x of NAME && PLACE === 'top' ? [gapL, gapR] : []) {   // terminals where the name meets the line
+      const gr = ctx.createRadialGradient(x, y0, 0, x, y0, 12);
+      gr.addColorStop(0, rgba(CORE, .9 * g)); gr.addColorStop(.35, rgba(COL, .35 * g)); gr.addColorStop(1, rgba(COL, 0));
+      ctx.fillStyle = gr; ctx.fillRect(x - 12, y0 - 12, 24, 24);
+      ctx.fillStyle = rgba(WHITE, .9); ctx.beginPath(); ctx.arc(x, y0, 2.4, 0, 7); ctx.fill();
+    }
+  }
+
+  function drawCharge(t) {                              // crackling strands where the current has passed
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    for (const r of routes) {
+      for (let strand = 0; strand < 2; strand++) {
+        let prev = null, prevC = 0;
+        for (let i = strand; i < r.S.length; i += 2) {
+          const p = r.S[i], c = p.tp <= t ? Math.exp(-(t - p.tp) / TAU) : 0;
+          if (c < .03) { prev = null; continue; }
+          const o = rnd(-1, 1) * (1.5 + 7 * c);
+          const pt = [p.x + p.nx * o, p.y + p.ny * o];
+          if (prev) {
+            const a = (c + prevC) / 2;
+            ctx.beginPath(); ctx.moveTo(prev[0], prev[1]); ctx.lineTo(pt[0], pt[1]);
+            ctx.strokeStyle = rgba(COL, .35 * a); ctx.lineWidth = 6; ctx.stroke();
+            ctx.strokeStyle = rgba(CORE, a); ctx.lineWidth = 1.5; ctx.stroke();
+          }
+          prev = pt; prevC = c;
+        }
+      }
+    }
+  }
+
+  function drawArcs(t) {
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    for (let i = arcs.length - 1; i >= 0; i--) {
+      const a = arcs[i], age = (t - a.born) / a.life;
+      if (age >= 1) { arcs.splice(i, 1); continue; }
+      if (age < 0 || Math.random() < .18) continue;       // flicker
+      glow(a.pts, a.pts.length, a.w, 1 - age * age);
+    }
+  }
+
+  function drawSparks(dt) {
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.lineCap = 'round';
+    for (let i = sparks.length - 1; i >= 0; i--) {
+      const s = sparks[i];
+      s.age += dt;
+      if (s.age >= s.life) { sparks.splice(i, 1); continue; }
+      s.vy += 650 * dt; s.vx *= 1 - 1.5 * dt;
+      s.x += s.vx * dt; s.y += s.vy * dt;
+      const a = 1 - s.age / s.life;
+      ctx.beginPath(); ctx.moveTo(s.x, s.y); ctx.lineTo(s.x - s.vx * .025, s.y - s.vy * .025);
+      ctx.strokeStyle = rgba(COL, .45 * a); ctx.lineWidth = 4.5; ctx.stroke();
+      ctx.strokeStyle = rgba(s.age < s.life * .3 ? WHITE : CORE, a); ctx.lineWidth = 1.6; ctx.stroke();
+    }
+  }
+
+  function crawl(t) {                                   // idle: a small arc creeping along the line
+    const r = routes[Math.random() < routes[0].len / (routes[0].len + routes[1].len) ? 0 : 1];
+    const n = 8 + (Math.random() * 12 | 0);
+    if (r.S.length < n + 2) return;
+    const i0 = Math.floor(rnd(0, r.S.length - n)), pts = [];
+    for (let i = i0; i < i0 + n; i++) {
+      const p = r.S[i], o = rnd(-3.5, 3.5);
+      pts.push([p.x + p.nx * o, p.y + p.ny * o]);
+    }
+    addArc(pts, t, rnd(.1, .2), .8);
+    if (Math.random() < .35) {
+      const p = r.S[i0 + (n >> 1)], L = rnd(12, 28);
+      addArc(jag(p.x, p.y, p.x + p.nx * L + p.tx * rnd(-18, 18), p.y + p.ny * L + p.ty * rnd(-18, 18), .3, 3), t + .03, rnd(.06, .12), .6);
+    }
+  }
+
+  // ---------- main loop ----------
+  let last = 0;
+  function frame(ms) {
+    const t = ms / 1000, dt = Math.min(.05, Math.max(0, t - last));
+    last = t;
+    if (t >= nextStrike) { strike(t); nextStrike = t + every; }
+
+    const d = S ? t - S.T0 : 99;                        // time since the bolt hit
+    const I = S ? boltI(d) : 0;
+    const after = d >= 0 ? Math.exp(-d / 1.1) : 0;
+
+    // the hit: current bursts through the letters to both ends, sparks fly
+    if (S && d >= 0 && !S.burst) {
+      S.burst = true;
+      for (let k = 0; k < 3; k++) {
+        addArc(jag(S.ix, S.iy, startL[0], startL[1], .16, 5), t + k * .07, .13, 1.3);
+        addArc(jag(S.ix, S.iy, startR[0], startR[1], .16, 5), t + k * .07, .13, 1.3);
+      }
+      for (let k = 0; k < 38; k++) {
+        const a = rnd(-Math.PI - .35, .35), v = rnd(120, 560);
+        spark(S.ix, S.iy, Math.cos(a) * v, Math.sin(a) * v, rnd(.35, .8));
+      }
+    }
+    if (S && d >= .04 && !S.started) { S.started = true; for (const r of routes) r.t0 = S.T0 + .04; }
+    if (S) {                                            // same channel re-strikes with a slight wiggle
+      const ph = d < .1 ? 0 : d < .2 ? 1 : 2;
+      if (ph !== S.phase) { S.phase = ph; rejitter(S.bolt.main); S.bolt.branches.forEach(b => rejitter(b.pts)); }
+    }
+
+    // move the current heads and mark what they passed
+    const heads = [];
+    for (const r of routes) {
+      if (r.done || t < r.t0) continue;
+      const pos = (t - r.t0) * SPEED;
+      for (const p of r.S) if (p.tp === Infinity && p.s <= pos) p.tp = r.t0 + p.s / SPEED;
+      if (pos >= r.len) { r.done = true; continue; }
+      const p = sampleAt(r, pos);
+      heads.push(p);
+      for (let k = 0; k < 2; k++) {
+        spark(p.x, p.y, p.nx * rnd(40, 220) - p.tx * rnd(0, 140), p.ny * rnd(40, 220) - p.ty * rnd(0, 140), rnd(.25, .55));
+      }
+      if (Math.random() < .5) {
+        const L = rnd(14, 36) * (p.ny < -.5 ? .5 : 1);   // short upward jumps: the HUD is up there
+        addArc(jag(p.x, p.y, p.x + p.nx * L - p.tx * rnd(0, 30), p.y + p.ny * L - p.ty * rnd(0, 30), .3, 3), t, rnd(.05, .1), .8);
+      }
+    }
+    // arcs jumping off the charged line
+    for (const r of routes) {
+      if (Math.random() > .45 * dt * 60) continue;
+      const lit = r.S.filter(p => p.tp <= t && t - p.tp < TAU * .9);
+      if (!lit.length) continue;
+      const p = lit[Math.random() * lit.length | 0], L = rnd(10, 32) * (p.ny < -.5 ? .5 : 1);
+      addArc(jag(p.x, p.y, p.x + p.nx * L + p.tx * rnd(-22, 22), p.y + p.ny * L + p.ty * rnd(-22, 22), .3, 3), t, rnd(.05, .12), .7);
+    }
+    // aftershock on the name
+    if (NAME && d >= 0 && d < 1.5 && Math.random() < .55 * (1 - d / 1.5) * dt * 60) {
+      const ax = rnd(txL, txR), bx = ax + rnd(-80, 80);
+      addArc(jag(ax, rnd(txT, txB), bx, rnd(txT, txB), .25, 4), t, rnd(.06, .14), .9);
+    }
+    // idle crackles and the odd neon flicker
+    if (C.ambient && d > 1.8 && t >= nextAmbient) { crawl(t); nextAmbient = t + rnd(.6, 2); }
+    if (C.ambient && d > 2 && t >= nextFlicker) { flickerUntil = t + .09; nextFlicker = t + rnd(5, 11); }
+
+    // ---- draw ----
+    ctx.setTransform(K, 0, 0, K, -RX * K, -RY * K);
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.globalAlpha = 1;
+    ctx.clearRect(RX, RY, RW, RH);
+
+    drawBorder(t, after * .9 + I * .5, Math.max(I, d >= 0 ? .6 * Math.exp(-d / .3) : 0));
+    drawCharge(t);
+
+    if (NAME && spriteN) {
+      const shake = d >= 0 && d < .35 ? (1 - d / .35) * 4 : 0;
+      const ox = rnd(-1, 1) * shake, oy = rnd(-1, 1) * shake * .7;
+      const na = t < flickerUntil && Math.random() < .7 ? .5 : 1;
+      const lead = S && d < 0 && d > -LEADER ? (1 + d / LEADER) * .35 : 0;
+      const hot = Math.max(I, d >= 0 ? .85 * Math.exp(-d / .28) : 0, lead, .08 + .06 * Math.sin(t * 2.2));
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.globalAlpha = na;
+      ctx.drawImage(spriteN, spX + ox, spY + oy, spW, spH);
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.globalAlpha = hot * na;
+      ctx.drawImage(spriteH, spX + ox, spY + oy, spW, spH);
+      ctx.globalAlpha = 1;
+    }
+
+    drawArcs(t);
+
+    for (const p of heads) {
+      const gr = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, 30);
+      gr.addColorStop(0, rgba(WHITE, 1)); gr.addColorStop(.2, rgba(CORE, .7)); gr.addColorStop(1, rgba(COL, 0));
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.fillStyle = gr; ctx.fillRect(p.x - 30, p.y - 30, 60, 60);
+    }
+
+    if (S && d > -LEADER && d < .9) {
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+      const { main, branches } = S.bolt;
+      if (d < 0) {                                      // stepped leader crawling down
+        const n = Math.max(2, Math.ceil((1 + d / LEADER) * main.length));
+        glow(main, n, 1.2, .45);
+        for (const b of branches) if (b.k < n) glow(b.pts, Math.min(b.pts.length, n - b.k), .8, .35);
+      } else if (I > .01) {
+        glow(main, main.length, 3, I);
+        for (const b of branches) glow(b.pts, b.pts.length, 1.4, I * .7);
+      }
+      if (I > .01) {                                    // impact flash + flare
+        const R = 160, gr = ctx.createRadialGradient(S.ix, S.iy, 0, S.ix, S.iy, R);
+        gr.addColorStop(0, rgba(CORE, .6 * I)); gr.addColorStop(.3, rgba(COL, .2 * I)); gr.addColorStop(1, rgba(COL, 0));
+        ctx.fillStyle = gr; ctx.fillRect(S.ix - R, S.iy - R, R * 2, R * 2);
+        const fl = ctx.createLinearGradient(S.ix - 220, 0, S.ix + 220, 0);
+        fl.addColorStop(0, rgba(CORE, 0)); fl.addColorStop(.5, rgba(WHITE, .8 * I)); fl.addColorStop(1, rgba(CORE, 0));
+        ctx.fillStyle = fl; ctx.fillRect(S.ix - 220, S.iy - 1.2, 440, 2.4);
+      }
+    }
+
+    drawSparks(dt);
+
+    // fade the top so the bolt comes out of nowhere instead of a hard edge
+    ctx.globalCompositeOperation = 'destination-out';
+    const fade = ctx.createLinearGradient(0, RY, 0, RY + 120);
+    fade.addColorStop(0, 'rgba(0,0,0,1)'); fade.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = fade; ctx.fillRect(RX, RY, RW, 120);
+    ctx.globalCompositeOperation = 'source-over';
+
+    requestAnimationFrame(frame);
+  }
+
+  function start() {
+    if (routes) return;
+    layout();
+    fit();
+    addEventListener('resize', fit);
+    const t = performance.now() / 1000;
+    last = t; nextStrike = t + 1.2; nextAmbient = t + 2; nextFlicker = t + 6;
+    addEventListener('pointerdown', () => {             // click (or OBS "Interact") to fire it now
+      const now = performance.now() / 1000;
+      if (!S || now - S.T0 > .8) { strike(now); nextStrike = now + every; }
+    });
+    requestAnimationFrame(frame);
+  }
+  Promise.race([document.fonts.load(fontAt(C.font.size), NAME || 'M'), new Promise(r => setTimeout(r, 3000))]).then(start, start);
+})();
+</script>
+</body>
+</html>
