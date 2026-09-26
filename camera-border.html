@@ -283,8 +283,13 @@ const CONFIG = {
     g.fillStyle = rgba(hot ? CORE : COL, 1);
     g.fillText(NAME, tx, ty); g.fillText(NAME, tx, ty);
     g.shadowBlur = 0; g.shadowColor = 'transparent';
-    if (!hot) { g.lineWidth = 10; g.strokeStyle = 'rgba(3,5,10,.9)'; g.strokeText(NAME, tx, ty); }
-    g.lineWidth = hot ? 6 : 4; g.strokeStyle = rgba(hot ? CORE : COL, 1); g.strokeText(NAME, tx, ty);
+    if (!hot) {
+      g.lineWidth = 12; g.strokeStyle = 'rgba(3,5,10,.9)'; g.strokeText(NAME, tx, ty);   // dark outer edge
+      g.lineWidth = 8; g.strokeStyle = rgba(COL, 1); g.strokeText(NAME, tx, ty);         // colored rim
+      g.lineWidth = 3.5; g.strokeStyle = 'rgba(3,5,10,.95)'; g.strokeText(NAME, tx, ty); // black line between rim and fill:
+    } else {                                                                             // keeps letters readable in light colors
+      g.lineWidth = 4; g.strokeStyle = rgba(CORE, 1); g.strokeText(NAME, tx, ty);
+    }
     const gr = g.createLinearGradient(0, ty - M.asc, 0, ty + M.desc);
     if (hot) { gr.addColorStop(0, '#fff'); gr.addColorStop(1, rgba(CORE, 1)); }
     else { gr.addColorStop(0, '#fff'); gr.addColorStop(.4, rgba(CORE, 1)); gr.addColorStop(1, rgba(mix(COL, LIGHT, .25), 1)); }
