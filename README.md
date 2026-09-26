@@ -5,7 +5,7 @@ Animated overlays for [Mando](https://www.twitch.tv/mando)'s stream, made for OB
 | File | What it is | OBS size |
 |---|---|---|
 | `camera-border.html` | Lightning border for the webcam in the bottom-right corner | **1920 × 1080** |
-| `index.html` | Landing page: pick a color and copy the OBS link | — |
+| `index.html` | Link builder: pick the color, camera size, strike interval, name and location, then copy the OBS link | — |
 
 ## Camera border
 

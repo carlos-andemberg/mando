@@ -27,9 +27,17 @@
           background:var(--chip); box-shadow:0 0 10px -2px var(--chip); transition:transform .12s; }
   .chip:hover { transform:scale(1.12); }
   .chip[aria-pressed="true"] { border-color:#fff; transform:scale(1.12); }
-  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:18px; }
-  input[type=text] { font:inherit; font-size:15px; color:#fff; background:rgba(0,0,0,.35); border:1px solid rgba(255,255,255,.15);
-                     border-radius:4px; padding:7px 10px; width:130px; }
+  .fields { display:grid; grid-template-columns:repeat(auto-fit, minmax(130px, 1fr)); gap:12px; margin-bottom:20px; }
+  .field { display:flex; flex-direction:column; gap:6px; min-width:0; }
+  .field > span { font-size:12px; letter-spacing:1.5px; text-transform:uppercase; color:rgba(255,255,255,.45); }
+  .field.wide { grid-column:span 2; }
+  .pair { display:flex; align-items:center; gap:6px; }
+  .pair i { font-style:normal; color:rgba(255,255,255,.4); }
+  input, select { font:inherit; font-size:15px; color:#fff; background:rgba(0,0,0,.35); border:1px solid rgba(255,255,255,.15);
+                  border-radius:4px; padding:7px 10px; width:100%; min-width:0; }
+  input:focus, select:focus { outline:none; border-color:var(--c); box-shadow:0 0 0 1px var(--c); }
+  select option { background:#0a1017; }
+  @media (max-width:480px) { .field.wide { grid-column:auto; } }
   .url { display:flex; gap:8px; align-items:stretch; margin-bottom:14px; }
   .url code { flex:1; min-width:0; overflow-x:auto; white-space:nowrap; font-size:14px; padding:10px 12px; border-radius:4px;
               background:rgba(0,0,0,.4); border:1px solid rgba(255,255,255,.1); color:#cfe6ff; }
@@ -52,8 +60,23 @@
 
     <div class="label">Color</div>
     <div class="chips" id="chips"></div>
-    <div class="row">
-      <input type="text" id="hex" placeholder="or hex: ff6600" maxlength="7" aria-label="Custom hex color">
+    <div class="fields">
+      <label class="field"><span>Hex</span><input type="text" id="hex" placeholder="ff6600" maxlength="7"></label>
+      <div class="field wide"><span>Camera size</span>
+        <div class="pair">
+          <input type="number" id="w" value="460" min="160" max="1880" aria-label="Camera width">
+          <i>×</i>
+          <input type="number" id="h" value="325" min="90" max="880" aria-label="Camera height">
+        </div>
+      </div>
+      <label class="field"><span>Strike every (s)</span><input type="number" id="every" value="10" min="2" max="3600" step="0.5"></label>
+      <label class="field"><span>Name</span><input type="text" id="name" value="MANDO" maxlength="20"></label>
+      <label class="field"><span>Location</span>
+        <select id="place">
+          <option value="corner">Corner tag</option>
+          <option value="top">Top line (covers HUD)</option>
+        </select>
+      </label>
     </div>
 
     <div class="label">OBS link · Browser source 1920 × 1080</div>
@@ -66,7 +89,7 @@
 
   <p class="tips">
     <b>In OBS:</b> Sources → + → Browser → paste the link, width 1920, height 1080. Keep it above the webcam and size the webcam to fill the box.<br>
-    <b>More options</b> (add with &amp;): <code>w=460&amp;h=325</code> webcam size · <code>every=10</code> seconds between strikes · <code>name=MANDO</code> · <code>place=top</code> name on the top line
+    <b>Camera size</b> is in 1920 × 1080 pixels: match it to the webcam source in OBS. Leave the name empty to hide it.
   </p>
 </main>
 
@@ -76,7 +99,9 @@
     yellow: '#ffe62e', gold: '#ffbe1f', orange: '#ff7a1c', red: '#ff2a3a', crimson: '#ff1f5a',
     pink: '#ff3ca6', magenta: '#ff2bf0', purple: '#a456ff', violet: '#7d5cff', white: '#e4ecff',
   };
-  const chips = document.getElementById('chips'), hex = document.getElementById('hex');
+  const $ = id => document.getElementById(id);
+  const chips = $('chips'), hex = $('hex');
+  const DEFAULTS = { w: 460, h: 325, every: 10, name: 'MANDO', place: 'corner' };
   let color = 'blue';
 
   for (const [name, value] of Object.entries(PRESETS)) {
@@ -95,14 +120,38 @@
     color = name;
     document.documentElement.style.setProperty('--c', value);
     for (const c of chips.children) c.setAttribute('aria-pressed', c.title === name);
-    const url = new URL('camera-border.html', location.href);
-    if (name !== 'blue') url.search = '?color=' + name;
-    document.getElementById('url').textContent = url.href;
-    document.getElementById('preview').href = url.href;
-    document.getElementById('zoom').href = url.href + (url.search ? '&' : '?') + 'zoom';
+    build();
   }
-  document.getElementById('copy').onclick = async e => {
-    try { await navigator.clipboard.writeText(document.getElementById('url').textContent); e.target.textContent = 'Copied!'; }
+
+  // a number from a field, clamped to the range the border accepts (null = empty, use the default)
+  function num(id, min, max) {
+    const n = parseFloat($(id).value);
+    return Number.isFinite(n) ? Math.min(max, Math.max(min, Math.round(n * 10) / 10)) : null;
+  }
+
+  // the link only carries what differs from the defaults
+  function build() {
+    const p = [];
+    if (color !== 'blue') p.push('color=' + color);
+    const w = num('w', 160, 1880), h = num('h', 90, 880);
+    if (w !== null && w !== DEFAULTS.w) p.push('w=' + w);
+    if (h !== null && h !== DEFAULTS.h) p.push('h=' + h);
+    const every = num('every', 2, 3600);
+    if (every !== null && every !== DEFAULTS.every) p.push('every=' + every);
+    const name = $('name').value.trim();
+    if (name !== DEFAULTS.name) p.push('name=' + encodeURIComponent(name));
+    if ($('place').value !== DEFAULTS.place) p.push('place=' + $('place').value);
+
+    const url = new URL('camera-border.html', location.href);
+    url.search = p.length ? '?' + p.join('&') : '';
+    $('url').textContent = url.href;
+    $('preview').href = url.href;
+    $('zoom').href = url.href + (p.length ? '&' : '?') + 'zoom';
+  }
+  for (const id of ['w', 'h', 'every', 'name', 'place']) { $(id).addEventListener('input', build); $(id).addEventListener('change', build); }
+
+  $('copy').onclick = async e => {
+    try { await navigator.clipboard.writeText($('url').textContent); e.target.textContent = 'Copied!'; }
     catch { e.target.textContent = 'Select & copy'; }
     setTimeout(() => e.target.textContent = 'Copy', 1500);
   };
