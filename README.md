@@ -2,6 +2,8 @@
 
 Animated overlays for [Mando](https://www.twitch.tv/mando)'s stream, made for OBS **Browser** sources. The background is transparent, and it's plain HTML/CSS/JS with no build step and no dependencies.
 
+**Live:** [mando.carlosandemberg.com.br](https://mando.carlosandemberg.com.br): pick the options and copy the OBS link. The border itself is at `https://mando.carlosandemberg.com.br/camera-border.html`.
+
 | File | What it is | OBS size |
 |---|---|---|
 | `camera-border.html` | Lightning border for the webcam in the bottom-right corner | **1920 × 1080** |
@@ -16,7 +18,7 @@ Every 10 seconds a bolt comes down from the upper left and strikes the name. The
 ### Add it to OBS
 
 1. **Sources → + → Browser**
-2. **URL**: the link to the published page, e.g. `https://YOUR-DOMAIN/camera-border.html?color=green`
+2. **URL**: the border link, e.g. `https://mando.carlosandemberg.com.br/camera-border.html?color=green`
 3. **Width 1920, Height 1080**. The source covers the whole screen and the border lands in the bottom-right corner on its own.
 4. Keep it **above** the webcam in the source list, and size the webcam to fill the box (460 × 325 by default, or set `w` and `h` to match your webcam).
 
